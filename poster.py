@@ -64,3 +64,11 @@ with open(STATE_FILE, "w", encoding="utf-8") as f:
     json.dump(posted_ids, f, ensure_ascii=False, indent=2)
 
 print(f"✅ Готово. Опубликовано: {len(new_items)}")
+# Сохранение состояния (в конце файла)
+try:
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(posted_ids, f, ensure_ascii=False, indent=2)
+    print(f"✅ Состояние сохранено ({len(posted_ids)} ID)")
+except Exception as e:
+    print(f"⚠️ Не удалось сохранить состояние: {e}")
+    # Это не критично — посты всё равно ушли в Telegram
