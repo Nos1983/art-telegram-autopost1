@@ -8,18 +8,25 @@ import time
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 RSS_URL = os.getenv("RSS_URL")
-HF_TOKEN = os.getenv("HF_TOKEN")
 
 print(f"🔍 Загружаю: {RSS_URL}")
+print(f" BOT_TOKEN: {'✅' if BOT_TOKEN else '❌'}")
+print(f"🔐 CHAT_ID: {CHAT_ID[:20] if CHAT_ID else '❌'}...")
 
+# Загрузка ID
 posted_ids = []
 if os.path.exists("posted_ids.json"):
     with open("posted_ids.json", "r", encoding="utf-8") as f:
-        try: posted_ids = json.load(f)
-        except: posted_ids = []
+        try:
+            posted_ids = json.load(f)
+            print(f"📚 Загружено {len(posted_ids)} ID из памяти")
+        except:
+            posted_ids = []
+else:
+    print(" Файл posted_ids.json не найден (начинаю с нуля)")
 
 # Парсинг
-headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+headers = {'User-Agent': 'Mozilla/5.0'}
 feed = feedparser.parse(RSS_URL, request_headers=headers)
 
 print(f"📊 Записей в RSS: {len(feed.entries)}")
@@ -29,78 +36,53 @@ if len(feed.entries) == 0:
     exit(0)
 
 def extract_image_url(entry):
-    """Извлекает ПРЯМУЮ ссылку на картинку из Reddit RSS"""
-    
-    # 1. media:thumbnail (Reddit часто кладёт сюда)
+    """Ищет картинку"""
     if hasattr(entry, 'media_thumbnail') and entry.media_thumbnail:
-        thumb_url = entry.media_thumbnail[0].get('url', '')
-        # Заменяем превью на полную версию
-        if 'preview.redd.it' in thumb_url:
-            return thumb_url.replace('preview.redd.it', 'i.redd.it').split('?')[0]
-        return thumb_url
+        url = entry.media_thumbnail[0].get('url', '')
+        return url.replace('preview.redd.it', 'i.redd.it').split('?')[0] if 'preview' in url else url
     
-    # 2. media:content
     if hasattr(entry, 'media_content') and entry.media_content:
         for media in entry.media_content:
             url = media.get('url', '')
-            if url and ('i.redd.it' in url or '.jpg' in url or '.png' in url):
+            if url and ('i.redd.it' in url or '.jpg' in url):
                 return url
     
-    # 3. Ищем в описании (content/summary)
     content = entry.get('content', [{}])[0].get('value', '') or entry.get('summary', '')
+    match = re.search(r'https://i\.redd\.it/[^\s"\'>]+', content)
+    if match:
+        return match.group(0).split('?')[0]
     
-    # Ищем img с прямыми ссылками на Reddit
-    img_patterns = [
-        r'https://i\.redd\.it/[^\s"\'>]+',
-        r'https://preview\.redd\.it/[^\s"\'>]+',
-        r'<img[^>]+src="(https?://[^\"]+\.(?:jpg|jpeg|png|gif))"'
-    ]
-    
-    for pattern in img_patterns:
-        match = re.search(pattern, content, re.IGNORECASE)
-        if match:
-            url = match.group(0) if 'i.redd.it' in match.group(0) else match.group(1)
-            # Нормализуем URL
-            url = url.replace('preview.redd.it', 'i.redd.it').split('?')[0]
-            return url
-    
-    # 4. Ссылка на сам пост Reddit (можно скачать через API, но это сложнее)
-    return None
-
-def download_and_upload_image(image_url):
-    """Скачивает картинку и возвращает как файл (для надёжности)"""
-    try:
-        response = requests.get(image_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
-        if response.status_code == 200:
-            return response.content
-    except:
-        pass
     return None
 
 new_items = []
-print("\n Обрабатываю...")
+skipped_ids = 0
 
-for i, entry in enumerate(feed.entries[:5]):  # Берём 5 постов
+print("\n🎨 Обрабатываю записи...")
+for i, entry in enumerate(feed.entries[:10]):  # Берём 10 для теста
     item_id = entry.get("id", entry.get("link", ""))
-    if not item_id or item_id in posted_ids:
+    
+    if not item_id:
+        print(f"  [{i+1}] ✗ Нет ID, пропускаю")
+        continue
+    
+    if item_id in posted_ids:
+        skipped_ids += 1
+        print(f"  [{i+1}] ⏭️ Уже отправлен")
         continue
 
     title = entry.get("title", "Без названия")
-    link = entry.get("link", "")
     image_url = extract_image_url(entry)
+    link = entry.get("link", "")
     
-    print(f"  [{i+1}] {title[:30]}...")
-    if image_url:
-        print(f"      🖼️ {image_url[:60]}...")
-    else:
-        print(f"      ✗ нет картинки")
+    print(f"  [{i+1}] ✅ НОВЫЙ: {title[:30]}...")
+    print(f"       {link[:50]}")
+    print(f"      🖼️ {'Есть картинка' if image_url else 'Нет картинки'}")
     
-    # Формируем текст
-    text = f"""🎨 <b>{title}</b>
+    text = f""" <b>{title}</b>
 
-<a href="{link}">Открыть пост на Reddit</a>
+<a href="{link}">Открыть на Reddit</a>
 
-#современноеискусство #арт #reddit"""
+#арт #современноеискусство"""
 
     new_items.append({
         "id": item_id,
@@ -108,21 +90,26 @@ for i, entry in enumerate(feed.entries[:5]):  # Берём 5 постов
         "image_url": image_url
     })
     
-    time.sleep(1)
+    time.sleep(0.5)
+
+print(f"\n Итого:")
+print(f"   Найдено новых: {len(new_items)}")
+print(f"   Пропущено (уже есть): {skipped_ids}")
 
 # Отправка
 if new_items:
-    print(f"\n📤 Отправляю...")
+    print(f"\n Начинаю отправку...")
     
     url_text = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     url_photo = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
     
-    sent_count = 0
+    sent = 0
     for i, item in enumerate(new_items):
-        if item["image_url"]:
-            # Пробуем отправить с картинкой
-            try:
-                # Метод 1: Отправляем URL напрямую
+        print(f"\n  [{i+1}] Отправляю...")
+        
+        try:
+            if item["image_url"]:
+                # С картинкой
                 res = requests.post(url_photo, json={
                     "chat_id": CHAT_ID,
                     "photo": item["image_url"],
@@ -130,55 +117,40 @@ if new_items:
                     "parse_mode": "HTML"
                 }, timeout=30)
                 
+                print(f"      Статус: {res.status_code}")
                 if res.status_code == 200:
                     posted_ids.append(item["id"])
-                    print(f"  [{i+1}] ✅ С картинкой (URL)")
-                    sent_count += 1
+                    print(f"      ✅ УСПЕХ!")
+                    sent += 1
                 else:
-                    err = res.text
-                    print(f"  [{i+1}] ️ URL не сработал: {err[:50]}")
-                    
-                    # Метод 2: Скачиваем и отправляем как файл
-                    img_data = download_and_upload_image(item["image_url"])
-                    if img_data:
-                        res = requests.post(url_photo, data={
-                            "chat_id": CHAT_ID,
-                            "caption": item["text"],
-                            "parse_mode": "HTML"
-                        }, files={"photo": ("image.jpg", img_data, "image/jpeg")}, timeout=30)
-                        
-                        if res.status_code == 200:
-                            posted_ids.append(item["id"])
-                            print(f"  [{i+1}] ✅ С картинкой (файл)")
-                            sent_count += 1
-                        else:
-                            print(f"  [{i+1}] ❌ Файл не отправлен: {res.text[:50]}")
-                    else:
-                        print(f"  [{i+1}] ❌ Не удалось скачать картинку")
-                        
-            except Exception as e:
-                print(f"  [{i+1}] ❌ Ошибка: {e}")
-        else:
-            # Отправляем только текст
-            res = requests.post(url_text, json={
-                "chat_id": CHAT_ID,
-                "text": item["text"],
-                "parse_mode": "HTML"
-            }, timeout=10)
-            
-            if res.status_code == 200:
-                posted_ids.append(item["id"])
-                print(f"  [{i+1}] ✅ Текст")
-                sent_count += 1
+                    print(f"       Ошибка: {res.text[:100]}")
             else:
-                print(f"  [{i+1}] ❌ Текст: {res.text[:50]}")
+                # Только текст
+                res = requests.post(url_text, json={
+                    "chat_id": CHAT_ID,
+                    "text": item["text"],
+                    "parse_mode": "HTML"
+                }, timeout=10)
+                
+                print(f"      Статус: {res.status_code}")
+                if res.status_code == 200:
+                    posted_ids.append(item["id"])
+                    print(f"      ✅ УСПЕХ (текст)!")
+                    sent += 1
+                else:
+                    print(f"      ❌ Ошибка: {res.text[:100]}")
+                    
+        except Exception as e:
+            print(f"      ❌ Исключение: {e}")
         
         time.sleep(1)
     
-    print(f"\n🎉 Отправлено: {sent_count}/{len(new_items)}")
+    print(f"\n Готово! Отправлено: {sent}/{len(new_items)}")
+else:
+    print("\n⚠️ Нечего отправлять (все посты уже были или RSS пуст)")
 
 # Сохранение
 if posted_ids:
     with open("posted_ids.json", "w", encoding="utf-8") as f:
         json.dump(posted_ids, f, ensure_ascii=False, indent=2)
-    print(f"💾 Сохранено ID: {len(posted_ids)}")
+    print(f"💾 Сохранено {len(posted_ids)} ID")
