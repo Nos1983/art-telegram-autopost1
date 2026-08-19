@@ -11,7 +11,7 @@ RSS_URL = os.getenv("RSS_URL", "https://hyperallergic.com/feed/")
 HF_TOKEN = os.getenv("HF_TOKEN")
 
 print(f"🔍 Загружаю: {RSS_URL}")
-print(f" AI: {'✅' if HF_TOKEN else '❌ (без HF_TOKEN описания будут простыми)'}")
+print(f"🤖 AI: {'✅' if HF_TOKEN else '️ Без HF_TOKEN описания будут простыми'}")
 
 posted_ids = []
 if os.path.exists("posted_ids.json"):
@@ -31,36 +31,10 @@ except:
 
 print(f"📊 Записей в RSS: {len(feed.entries)}")
 
-def analyze_image(image_url):
-    """AI-анализ изображения через HuggingFace"""
-    if not HF_TOKEN or not image_url:
-        return None
-    
-    try:
-        # Скачиваем изображение
-        img_data = requests.get(image_url, timeout=10).content
-        
-        # Отправляем в BLIP (описание изображений)
-        response = requests.post(
-            "https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-large",
-            headers={"Authorization": f"Bearer {HF_TOKEN}"},
-            data=img_data,
-            timeout=20
-        )
-        
-        if response.status_code == 200:
-            result = response.json()
-            if isinstance(result, list) and len(result) > 0:
-                return result[0].get('generated_text', '')
-    except Exception as e:
-        print(f"⚠️ AI ошибка: {e}")
-    
-    return None
-
-def translate_to_russian(text):
-    """Перевод на русский через Google Translate (бесплатно)"""
+def translate_text(text):
+    """Перевод на русский через Google Translate"""
     if not text:
-        return "Произведение современного искусства"
+        return ""
     
     try:
         url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ru&dt=t&q={text}"
@@ -71,38 +45,98 @@ def translate_to_russian(text):
     except:
         pass
     
-    # Словарь частых слов (fallback)
-    translations = {
-        'painting': 'картина', 'artwork': 'произведение искусства',
-        'sculpture': 'скульптура', 'photograph': 'фотография',
-        'abstract': 'абстрактное', 'modern': 'современное',
-        'contemporary': 'современное', 'art': 'искусство',
-        'colorful': 'красочное', 'black and white': 'чёрно-белое',
-        'portrait': 'портрет', 'landscape': 'пейзаж',
-        'digital art': 'цифровое искусство', 'installation': 'инсталляция',
-        'mixed media': 'смешанная техника', 'canvas': 'холст',
-        'oil': 'масло', 'watercolor': 'акварель', 'acrylic': 'акрил'
-    }
-    
-    text_lower = text.lower()
-    for eng, rus in translations.items():
-        text_lower = text_lower.replace(eng, rus)
-    
-    return text_lower.capitalize()
+    return text
 
-def create_detailed_description(ai_caption, title):
-    """Создаёт развёрнутое описание на русском"""
-    caption_ru = translate_to_russian(ai_caption) if ai_caption else "абстрактная композиция"
+def analyze_artwork(image_url, title, content_text=""):
+    """Детальный AI-анализ произведения искусства"""
+    if not HF_TOKEN or not image_url:
+        return None
     
-    # Добавляем детали
-    descriptions = [
-        f"{caption_ru}. Работа выполнена в стиле современного искусства.",
-        f"На изображении: {caption_ru}. Характерно для актуальных художественных практик.",
-        f"{caption_ru}. Пример современного визуального языка."
+    try:
+        # Скачиваем изображение
+        img_data = requests.get(image_url, timeout=10).content
+        
+        # Используем BLIP-2 для более детального описания
+        response = requests.post(
+            "https://api-inference.huggingface.co/models/Salesforce/blip2-opt-2.7b",
+            headers={"Authorization": f"Bearer {HF_TOKEN}"},
+            data=img_data,
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            if isinstance(result, list) and len(result) > 0:
+                ai_description = result[0].get('generated_text', '')
+                
+                # Формируем развёрнутое описание
+                description = f"{ai_description}. "
+                
+                # Анализируем дополнительные детали из текста статьи
+                if content_text:
+                    # Ищем информацию о технике
+                    techniques = {
+                        'oil painting': 'масляная живопись',
+                        'acrylic': 'акрил',
+                        'watercolor': 'акварель',
+                        'sculpture': 'скульптура',
+                        'installation': 'инсталляция',
+                        'photograph': 'фотография',
+                        'digital art': 'цифровое искусство',
+                        'mixed media': 'смешанная техника',
+                        'canvas': 'холст',
+                        'bronze': 'бронза',
+                        'charcoal': 'уголь',
+                        'pastel': 'пастель'
+                    }
+                    
+                    content_lower = content_text.lower()
+                    found_techniques = [tech for tech, rus in techniques.items() if tech in content_lower]
+                    
+                    if found_techniques:
+                        tech_ru = [techniques[t] for t in found_techniques[:2]]
+                        description += f"Техника: {', '.join(tech_ru)}. "
+                    
+                    # Ищем стиль/направление
+                    styles = {
+                        'abstract': 'абстракционизм',
+                        'surrealism': 'сюрреализм',
+                        'impressionism': 'импрессионизм',
+                        'expressionism': 'экспрессионизм',
+                        'minimalism': 'минимализм',
+                        'pop art': 'поп-арт',
+                        'contemporary': 'современное искусство',
+                        'conceptual': 'концептуализм'
+                    }
+                    
+                    found_styles = [style for style, rus in styles.items() if style in content_lower]
+                    
+                    if found_styles:
+                        style_ru = [styles[s] for s in found_styles[:1]]
+                        description += f"Стиль: {', '.join(style_ru)}. "
+                
+                return description.strip()
+                
+    except Exception as e:
+        print(f"⚠️ AI ошибка: {e}")
+    
+    return None
+
+def extract_author_from_title(title):
+    """Пытается извлечь имя автора из заголовка"""
+    # Паттерны для поиска имён
+    patterns = [
+        r'([A-Z][a-z]+ [A-Z][a-z]+)',  # Имя Фамилия
+        r'at the (\w+)',  # "at the Museum"
+        r'in (\w+)',  # "in Gallery"
     ]
     
-    # Выбираем случайное или первое
-    return descriptions[0]
+    for pattern in patterns:
+        match = re.search(pattern, title)
+        if match:
+            return match.group(1)
+    
+    return None
 
 def extract_image_url(entry):
     """Извлекает URL картинки"""
@@ -121,40 +155,54 @@ def extract_image_url(entry):
 new_items = []
 print("\n🎨 Обрабатываю...")
 
-for i, entry in enumerate(feed.entries[:3]):  # Только 3 поста (AI медленный)
+for i, entry in enumerate(feed.entries[:3]):  # Только 3 (AI медленный)
     item_id = entry.get("id", entry.get("link", ""))
     if not item_id or item_id in posted_ids:
         continue
 
-    title = entry.get("title", "Без названия")
+    # Заголовок на русском
+    title_en = entry.get("title", "Без названия")
+    title_ru = translate_text(title_en)
+    
+    # Извлекаем контент для анализа
+    content_text = entry.get('content', [{}])[0].get('value', '') or entry.get('summary', '')
+    
+    # Извлекаем автора
+    author = extract_author_from_title(title_en)
+    
+    # Картинка
     image_url = extract_image_url(entry)
     
-    print(f"  [{i+1}] {title[:30]}...")
+    print(f"  [{i+1}] {title_ru[:40]}...")
     
     # AI-анализ
     if image_url:
-        print(f"       Анализирую изображение...")
-        ai_caption = analyze_image(image_url)
-        description = create_detailed_description(ai_caption, title)
-        print(f"      ✅ {description[:60]}...")
+        print(f"       🤖 Анализирую произведение...")
+        art_description = analyze_artwork(image_url, title_en, content_text)
+        
+        if art_description:
+            print(f"      ✅ {art_description[:60]}...")
+        else:
+            art_description = "Произведение современного искусства"
+            print(f"      ⚠️ AI не смог проанализировать")
     else:
-        description = "Произведение современного искусства"
+        art_description = "Произведение современного искусства"
         print(f"      ⚠️ Нет изображения")
     
-    # 🎨 Формируем пост (БЕЗ ссылки на источник!)
-    text = f"""🎨 <b>{title}</b>
+    # 🎨 Формируем развёрнутый пост
+    post_text = f"""🎨 <b>{title_ru}</b>
 
-{description}
+{art_description}
 
 #современноеискусство #арт #выставка #художник"""
 
     new_items.append({
         "id": item_id,
-        "text": text,
+        "text": post_text,
         "image": image_url
     })
     
-    time.sleep(2)  # Пауза для AI
+    time.sleep(3)  # Пауза для AI
 
 # Отправка
 sent = 0
