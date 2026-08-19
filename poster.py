@@ -358,7 +358,7 @@ print(f"\n📊 Найдено с картинками: {len(all_entries)}")
 new_items = []
 print("\n🎨 Обрабатываю...")
 
-for i, entry in enumerate(all_entries[:4]):  # 4 поста
+for i, entry in enumerate(all_entries[:1]):  # 1 поста
     item_id = entry.get("id", entry.get("link", ""))
     if not item_id or item_id in posted_ids:
         continue
