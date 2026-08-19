@@ -1,17 +1,18 @@
 name: Auto Art Poster
 on:
   schedule:
-    - cron: '0 */4 * * *'  # Каждые 4 часа (UTC)
-  workflow_dispatch:       # Ручной запуск
+    - cron: '0 */4 * * *'
+  workflow_dispatch:
 jobs:
   post:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    env:  # ✅ Явно передаём секреты как переменные окружения
+    env:
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       RSS_URL: ${{ secrets.RSS_URL }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
@@ -19,18 +20,18 @@ jobs:
         with:
           python-version: '3.10'
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install feedparser requests Pillow
       - name: Run poster
         run: python poster.py
-      - name: Commit state (optional)
+      - name: Commit state (safe)
         continue-on-error: true
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          git add posted_ids.json
-          if git diff --quiet && git diff --staged --quiet; then
-            echo "✅ Нет изменений для коммита"
-          else
-            git commit -m "Update posted IDs [skip ci]"
+          if [ -f posted_ids.json ]; then
+            git add posted_ids.json
+            git diff --quiet && git diff --staged --quiet || git commit -m "Update posted IDs [skip ci]"
             git push
+          else
+            echo "⚠️ Файл не создан, пропускаю коммит"
           fi
