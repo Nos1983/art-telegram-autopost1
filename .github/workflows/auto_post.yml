@@ -6,20 +6,27 @@ on:
 jobs:
   post:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write      # ✅ Разрешение на push
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4  # ✅ Обновлённая версия
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5  # ✅ Обновлённая версия
         with:
           python-version: '3.10'
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Run poster
         run: python poster.py
-      - name: Commit state
+      - name: Commit state (optional)
+        continue-on-error: true  # ✅ Не ломает весь процесс, если push не выйдет
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           git add posted_ids.json
-          git diff --quiet && git diff --staged --quiet || git commit -m "Update posted IDs"
-          git push
+          if git diff --quiet && git diff --staged --quiet; then
+            echo "✅ Нет изменений для коммита"
+          else
+            git commit -m "Update posted IDs [skip ci]"
+            git push
+          fi
