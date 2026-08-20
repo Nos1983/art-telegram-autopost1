@@ -6,11 +6,9 @@ import random
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-HF_TOKEN = os.getenv("HF_TOKEN")
 POSTS_PER_RUN = int(os.getenv("POSTS_PER_RUN", "1"))
 
 print("🏛️ The Met Collection Auto-Poster")
-print(f"🤖 AI: {'✅' if HF_TOKEN else '⚠️'}")
 
 posted_ids = []
 if os.path.exists("posted_ids.json"):
@@ -19,24 +17,21 @@ if os.path.exists("posted_ids.json"):
             posted_ids = json.load(f)
     except: posted_ids = []
 
-def fetch_met_artworks(has_image=True, limit=50):
+def fetch_met_artworks():
     """Загружает работы через API The Met"""
     
-    # 1. Получаем список ID объектов
     ids_url = "https://collectionapi.metmuseum.org/public/collection/v1/objects"
     
-    print(f"📥 Запрашиваю список объектов...")
+    print(f" Запрашиваю список объектов...")
     
     try:
-        # The Met API не требует ключа
         response = requests.get(ids_url, timeout=15)
         response.raise_for_status()
         data = response.json()
         
         object_ids = data.get('objectIDs', [])
-        print(f"📊 Всего объектов в API: {len(object_ids)}")
+        print(f"📊 Всего объектов: {len(object_ids)}")
         
-        # Берём случайные ID (чтобы разнообразие)
         # Фильтруем уже отправленные
         available_ids = [oid for oid in object_ids if oid not in posted_ids]
         
@@ -44,11 +39,11 @@ def fetch_met_artworks(has_image=True, limit=50):
             print("⚠️ Все ID уже отправлены!")
             return []
         
-        # Берём нужное количество + запас
-        selected_ids = random.sample(available_ids, min(limit, len(available_ids)))
+        # Берём случайные ID
+        selected_ids = random.sample(available_ids, min(50, len(available_ids)))
         print(f"✅ Выбрано {len(selected_ids)} новых ID")
         
-        # 2. Загружаем детали для каждого объекта
+        # Загружаем детали
         artworks = []
         for oid in selected_ids:
             try:
@@ -65,10 +60,9 @@ def fetch_met_artworks(has_image=True, limit=50):
                     artworks.append(artwork)
                     
             except Exception as e:
-                print(f"⚠️ Ошибка загрузки объекта {oid}: {e}")
                 continue
             
-            time.sleep(0.2)  # Не спамим API
+            time.sleep(0.2)
         
         return artworks
         
@@ -76,40 +70,19 @@ def fetch_met_artworks(has_image=True, limit=50):
         print(f"❌ Ошибка API: {e}")
         return []
 
-def analyze_image(image_url):
-    """AI-анализ изображения"""
-    if not HF_TOKEN or not image_url:
-        return None
-    
-    try:
-        img_data = requests.get(image_url, timeout=10).content
-        response = requests.post(
-            "https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-large",
-            headers={"Authorization": f"Bearer {HF_TOKEN}"},
-            data=img_data,
-            timeout=20
-        )
-        
-        if response.status_code == 200:
-            result = response.json()
-            if isinstance(result, list) and len(result) > 0:
-                return result[0].get('generated_text', '')
-    except:
-        pass
-    
-    return None
-
-def create_description(artwork, ai_desc):
-    """Создаёт описание на русском"""
-    lines = []
+def create_description(artwork):
+    """Создаёт описание из метаданных The Met"""
     
     title = artwork.get('title', 'Без названия')
     artist = artwork.get('artistDisplayName')
     year = artwork.get('objectDate')
     medium = artwork.get('medium')
     department = artwork.get('department')
-    image_url = artwork.get('primaryImage')
+    culture = artwork.get('culture')
+    gallery_num = artwork.get('galleryNumber')
     link = artwork.get('objectURL', 'https://www.metmuseum.org')
+    
+    lines = []
     
     # Заголовок
     lines.append(f"<b>{title}</b>\n")
@@ -122,19 +95,34 @@ def create_description(artwork, ai_desc):
     if year:
         lines.append(f"📅 <b>Дата:</b> {year}")
     
+    # Культура/регион
+    if culture and culture != 'Unknown':
+        lines.append(f"🌍 <b>Культура:</b> {culture}")
+    
     # Отдел музея
     if department:
-        lines.append(f"🏛️ <b>Отдел:</b> {department}")
+        lines.append(f"️ <b>Отдел:</b> {department}")
     
-    # Техника/материалы
+    # Техника/материалы (красиво форматируем)
     if medium:
-        # Обрезаем если слишком длинно
-        medium_short = medium[:100] + "..." if len(medium) > 100 else medium
-        lines.append(f"🎨 <b>Материалы:</b> {medium_short}")
+        # Заменяем технические термины на понятные
+        medium_map = {
+            'Oil on canvas': 'Масло на холсте',
+            'Watercolor': 'Акварель',
+            'Bronze': 'Бронза',
+            'Marble': 'Мрамор',
+            'Ink on paper': 'Тушь на бумаге',
+            'Photograph': 'Фотография',
+            'Sculpture': 'Скульптура',
+            'Painting': 'Живопись',
+        }
+        
+        medium_ru = medium_map.get(medium, medium)
+        lines.append(f"🎨 <b>Техника:</b> {medium_ru[:100]}")
     
-    # AI описание картинки
-    if ai_desc:
-        lines.append(f"🖼️ <b>На изображении:</b> {ai_desc}")
+    # Номер галереи (если есть)
+    if gallery_num:
+        lines.append(f"️ <b>Галерея:</b> {gallery_num}")
     
     # Ссылка
     lines.append(f"\n🔗 <a href=\"{link}\">Подробнее на Met Museum</a>")
@@ -146,11 +134,10 @@ def create_description(artwork, ai_desc):
 
 # 🔥 Основной запуск
 print("\n🏛️ Загружаю работы из The Met API...")
-artworks = fetch_met_artworks(has_image=True, limit=30)
+artworks = fetch_met_artworks()
 
 if not artworks:
     print("⚠️ Не найдено новых работ с картинками")
-    # Создаём файл чтобы Git не упал
     with open("posted_ids.json", "w", encoding="utf-8") as f:
         json.dump(posted_ids, f, ensure_ascii=False, indent=2)
     print("💾 Сохранено (0 новых)")
@@ -173,21 +160,13 @@ for i, artwork in enumerate(artworks_to_post):
     # Картинка
     image_url = artwork.get('primaryImage')
     if not image_url:
-        print(f"    ⚠️ Нет картинки, пропускаю")
+        print(f"    ⚠️ Нет картинки")
         continue
     
     print(f"    🖼️ {image_url[:70]}...")
     
-    # AI-анализ
-    ai_desc = None
-    if HF_TOKEN:
-        print(f"    🤖 AI-анализ...")
-        ai_desc = analyze_image(image_url)
-        if ai_desc:
-            print(f"    ✅ {ai_desc}")
-    
-    # Создаём описание
-    description = create_description(artwork, ai_desc)
+    # Создаём описание из метаданных
+    description = create_description(artwork)
     
     # Отправка
     try:
@@ -212,11 +191,11 @@ for i, artwork in enumerate(artworks_to_post):
     except Exception as e:
         print(f"    ❌ Ошибка: {e}")
     
-    time.sleep(2)
+    time.sleep(1)
 
-# 🔒 ВСЕГДА сохраняем файл
+# Сохранение
 with open("posted_ids.json", "w", encoding="utf-8") as f:
     json.dump(posted_ids, f, ensure_ascii=False, indent=2)
 
 print(f"\n🎉 Отправлено: {sent}/{len(artworks_to_post)}")
-print(f"💾 Сохранено {len(posted_ids)} ID")
+print(f" Сохранено {len(posted_ids)} ID")
