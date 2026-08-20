@@ -1,3 +1,4 @@
 feedparser
 requests
-Pillow
+beautifulsoup4
+lxml
