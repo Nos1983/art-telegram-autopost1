@@ -1,16 +1,14 @@
 import requests
 import json
 import os
-import re
 import time
-from bs4 import BeautifulSoup
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 HF_TOKEN = os.getenv("HF_TOKEN")
 POSTS_PER_RUN = int(os.getenv("POSTS_PER_RUN", "1"))
 
-print("🎨 Tate Collection Auto-Poster")
+print("🎨 Tate Collection Auto-Poster (API)")
 print(f"🤖 AI: {'✅' if HF_TOKEN else '⚠️'}")
 
 posted_ids = []
@@ -20,89 +18,50 @@ if os.path.exists("posted_ids.json"):
             posted_ids = json.load(f)
     except: posted_ids = []
 
-def parse_tate_collection():
-    """Парсит Tate Collection и возвращает список работ"""
+def fetch_tate_artworks(has_image=True, limit=20):
+    """Загружает работы через официальный API Tate"""
     
-    url = "https://www.tate.org.uk/collection?attributes=img"
-    print(f"📥 Загружаю: {url}")
-    
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    # Tate API: https://www.tate.org.uk/art/artworks.json
+    url = "https://www.tate.org.uk/art/artworks.json"
+    params = {
+        'q': '',
+        'hasImage': 'true' if has_image else 'false',
+        'size': limit,
+        'sort': '-dated',  # Сначала новые
     }
     
+    print(f"📥 Запрашиваю API: {url}")
+    
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    
     try:
-        response = requests.get(url, headers=headers, timeout=15)
+        response = requests.get(url, params=params, headers=headers, timeout=15)
         response.raise_for_status()
+        data = response.json()
         
-        soup = BeautifulSoup(response.text, 'lxml')
-        
-        artworks = []
-        
-        # Ищем карточки работ (селекторы могут меняться)
-        art_cards = soup.find_all('div', class_='artwork-item') or soup.find_all('article')
-        
-        print(f"📊 Найдено карточек: {len(art_cards)}")
-        
-        for card in art_cards[:10]:  # Берём первые 10
-            try:
-                # 🖼️ Картинка
-                img_tag = card.find('img')
-                if not img_tag:
-                    continue
-                    
-                image_url = img_tag.get('src') or img_tag.get('data-src')
-                if image_url:
-                    # Добавляем https: если нет
-                    if image_url.startswith('//'):
-                        image_url = 'https:' + image_url
-                    elif not image_url.startswith('http'):
-                        image_url = 'https://www.tate.org.uk' + image_url
-                
-                # 🎨 Название
-                title_tag = card.find('h3') or card.find('h2') or card.find('a', class_='artwork-title')
-                title = title_tag.get_text(strip=True) if title_tag else "Без названия"
-                
-                # 👨🎨 Художник
-                artist_tag = card.find('div', class_='artist') or card.find('span', class_='artist-name')
-                artist = artist_tag.get_text(strip=True) if artist_tag else None
-                
-                # 📅 Год
-                year_tag = card.find('span', class_='date') or card.find('time')
-                year = year_tag.get_text(strip=True) if year_tag else None
-                
-                #  Описание (если есть)
-                desc_tag = card.find('p', class_='description') or card.find('div', class_='caption')
-                description = desc_tag.get_text(strip=True) if desc_tag else None
-                
-                #  Ссылка на работу
-                link_tag = card.find('a', href=True)
-                link = 'https://www.tate.org.uk' + link_tag.get('href') if link_tag else url
-                
-                # Уникальный ID
-                item_id = link
-                
-                if item_id in posted_ids:
-                    continue
-                
-                artworks.append({
-                    'id': item_id,
-                    'title': title,
-                    'artist': artist,
-                    'year': year,
-                    'description': description,
-                    'image': image_url,
-                    'link': link
-                })
-                
-            except Exception as e:
-                print(f"⚠️ Ошибка парсинга карточки: {e}")
-                continue
+        artworks = data.get('results', [])
+        print(f"📊 Найдено работ в API: {len(artworks)}")
         
         return artworks
         
     except Exception as e:
-        print(f"❌ Ошибка загрузки: {e}")
+        print(f"❌ Ошибка API: {e}")
         return []
+
+def get_high_res_image(thumbnail_url):
+    """Получает ссылку на изображение в высоком разрешении"""
+    if not thumbnail_url:
+        return None
+    
+    # Tate хранит картинки в разных форматах
+    # Пробуем получить полное разрешение
+    if '/800-' in thumbnail_url:
+        return thumbnail_url.replace('/800-', '/1200-')
+    elif 'image.tate.org.uk' in thumbnail_url:
+        # Заменяем превью на оригинал
+        return thumbnail_url.replace('/images/', '/images/large/')
+    
+    return thumbnail_url
 
 def analyze_image(image_url):
     """AI-анализ изображения"""
@@ -131,56 +90,85 @@ def create_description(artwork, ai_desc):
     """Создаёт описание на русском"""
     lines = []
     
+    title = artwork.get('title', 'Без названия')
+    artist = artwork.get('artist', [{}])[0].get('name') if artwork.get('artist') else None
+    year = artwork.get('dateText')
+    medium = artwork.get('medium')
+    description = artwork.get('thumbnailCopyright') or artwork.get('inscription')
+    link = f"https://www.tate.org.uk{artwork.get('url', '')}"
+    
     # Заголовок
-    lines.append(f"<b>{artwork['title']}</b>\n")
+    lines.append(f"<b>{title}</b>\n")
     
     # Художник
-    if artwork.get('artist'):
-        lines.append(f"‍🎨 <b>Художник:</b> {artwork['artist']}")
+    if artist:
+        lines.append(f"👨‍🎨 <b>Художник:</b> {artist}")
     
     # Год
-    if artwork.get('year'):
-        lines.append(f"📅 <b>Год:</b> {artwork['year']}")
+    if year:
+        lines.append(f"📅 <b>Год:</b> {year}")
     
-    # AI описание
+    # Техника
+    if medium:
+        lines.append(f"🎨 <b>Техника:</b> {medium}")
+    
+    # AI описание картинки
     if ai_desc:
         lines.append(f"🖼️ <b>На изображении:</b> {ai_desc}")
     
-    # Описание из сайта
-    if artwork.get('description'):
-        lines.append(f"📖 {artwork['description']}")
+    # Описание/права
+    if description and len(description) < 200:
+        lines.append(f"📖 {description}")
     
     # Ссылка
-    lines.append(f"\n🔗 <a href=\"{artwork['link']}\">Подробнее на Tate.org.uk</a>")
+    lines.append(f"\n🔗 <a href=\"{link}\">Подробнее на Tate.org.uk</a>")
     
     # Хештеги
-    lines.append("\n#Tate #современноеискусство #арт #коллекция")
+    lines.append("\n#Tate #искусство #арт #коллекция #музей")
     
     return "\n".join(lines)
 
 # 🔥 Основной запуск
-print("\n🎨 Начинаю парсинг Tate Collection...")
-artworks = parse_tate_collection()
+print("\n🎨 Загружаю работы из Tate API...")
+artworks = fetch_tate_artworks(has_image=True, limit=20)
 
-if not artworks:
-    print("⚠️ Не найдено работ!")
+# Фильтруем уже отправленные
+new_artworks = [a for a in artworks if a.get('id') not in posted_ids]
+
+if not new_artworks:
+    print("⚠️ Все работы уже отправлены или API вернул пустой результат")
+    # Создаём пустой файл, чтобы Git не упал
+    with open("posted_ids.json", "w", encoding="utf-8") as f:
+        json.dump(posted_ids, f, ensure_ascii=False, indent=2)
+    print("💾 Сохранено (0 новых)")
     exit(0)
 
-print(f"✅ Найдено {len(artworks)} новых работ")
+print(f"✅ Найдено {len(new_artworks)} новых работ")
 
 # Берём нужное количество
-artworks_to_post = artworks[:POSTS_PER_RUN]
+artworks_to_post = new_artworks[:POSTS_PER_RUN]
 print(f"\n📤 Буду отправлять: {len(artworks_to_post)}\n")
 
 # Отправка
 sent = 0
 for i, artwork in enumerate(artworks_to_post):
-    print(f"[{i+1}] {artwork['title'][:50]}...")
+    title = artwork.get('title', 'Без названия')
+    print(f"[{i+1}] {title[:50]}...")
     
-    # AI-анализ картинки
-    if artwork['image']:
+    # Картинка
+    thumb = artwork.get('thumbnailUrl')
+    image_url = get_high_res_image(thumb) if thumb else None
+    
+    if not image_url:
+        print(f"    ⚠️ Нет картинки, пропускаю")
+        continue
+    
+    print(f"    🖼️ {image_url[:60]}...")
+    
+    # AI-анализ
+    if HF_TOKEN:
         print(f"    🤖 AI-анализ...")
-        ai_desc = analyze_image(artwork['image'])
+        ai_desc = analyze_image(image_url)
         if ai_desc:
             print(f"    ✅ {ai_desc}")
     else:
@@ -191,30 +179,19 @@ for i, artwork in enumerate(artworks_to_post):
     
     # Отправка
     try:
-        if artwork['image']:
-            res = requests.post(
-                f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
-                json={
-                    "chat_id": CHAT_ID,
-                    "photo": artwork['image'],
-                    "caption": description,
-                    "parse_mode": "HTML"
-                },
-                timeout=30
-            )
-        else:
-            res = requests.post(
-                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                json={
-                    "chat_id": CHAT_ID,
-                    "text": description,
-                    "parse_mode": "HTML"
-                },
-                timeout=15
-            )
+        res = requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
+            json={
+                "chat_id": CHAT_ID,
+                "photo": image_url,
+                "caption": description,
+                "parse_mode": "HTML"
+            },
+            timeout=30
+        )
         
         if res.status_code == 200:
-            posted_ids.append(artwork['id'])
+            posted_ids.append(artwork.get('id'))
             sent += 1
             print(f"    ✅ Отправлено!")
         else:
@@ -225,9 +202,9 @@ for i, artwork in enumerate(artworks_to_post):
     
     time.sleep(2)
 
-# Сохранение
+# 🔒 ВСЕГДА сохраняем файл (даже если 0 отправлено)
 with open("posted_ids.json", "w", encoding="utf-8") as f:
     json.dump(posted_ids, f, ensure_ascii=False, indent=2)
 
-print(f"\n Отправлено: {sent}/{len(artworks_to_post)}")
+print(f"\n🎉 Отправлено: {sent}/{len(artworks_to_post)}")
 print(f"💾 Сохранено {len(posted_ids)} ID")
