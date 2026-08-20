@@ -7,13 +7,17 @@ import random
 import html
 import hashlib
 import urllib.parse
+from urllib.parse import urlparse, urlunparse
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 POSTS_PER_RUN = int(os.getenv("POSTS_PER_RUN", "1"))
 STATE_FILE = "posted_ids.json"
 
-HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+HEADERS = {
+    "User-Agent": "ArtPosterBot/1.0 (+https://github.com/educational-project)",
+    "Accept": "image/*,*/*;q=0.8",
+}
 
 # ================= СЛУЖЕБНОЕ =================
 
@@ -40,8 +44,15 @@ def extract_year(s):
     m = re.search(r"\b(1[89]\d{2}|20\d{2})\b", s or "")
     return m.group(1) if m else ""
 
+def clean_image_url(url):
+    """Убирает UTM-метки и query string — они триггерят 429 от Wikimedia."""
+    try:
+        p = urlparse(url)
+        return urlunparse((p.scheme, p.netloc, p.path, "", "", ""))
+    except Exception:
+        return url.split("?")[0]
+
 def translate(text):
-    """en→ru. Возвращает None, если оба сервиса недоступны."""
     if not text or not text.strip():
         return None
     text = text.strip()
@@ -68,20 +79,29 @@ def translate(text):
     return None
 
 def download(url):
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=30)
-        r.raise_for_status()
-        if len(r.content) < 2000:
+    """Скачивание с retry и очисткой UTM."""
+    clean = clean_image_url(url)
+    for attempt in range(3):
+        try:
+            r = requests.get(clean, headers=HEADERS, timeout=30, stream=False)
+            if r.status_code == 200 and len(r.content) >= 2000:
+                return r.content
+            if r.status_code in (429, 503):
+                wait = 5 * (attempt + 1)
+                print(f"   ⏳ Rate-limit, жду {wait}с...")
+                time.sleep(wait)
+                continue
+            print(f"   ⚠️ HTTP {r.status_code}")
             return None
-        return r.content
-    except Exception as e:
-        print(f"   ⚠️ Не удалось скачать картинку: {e}")
-        return None
+        except Exception as e:
+            print(f"   ⚠️ Попытка {attempt+1}: {e}")
+            time.sleep(3)
+    return None
 
 # ================= ИСТОЧНИКИ =================
 
 def source_commons(limit=20):
-    """A) Wikimedia Commons — проверенные категории, без ключа."""
+    """A) Wikimedia Commons — без iiurlwidth (без UTM-меток)."""
     items = []
     cats = ["Category:21st-century_paintings", "Category:20th-century_paintings"]
     for cat in cats:
@@ -90,15 +110,17 @@ def source_commons(limit=20):
                 "action": "query", "format": "json",
                 "generator": "categorymembers", "gcmtitle": cat,
                 "gcmtype": "file", "gcmlimit": limit,
-                "prop": "imageinfo", "iiprop": "url|extmetadata", "iiurlwidth": 1200,
+                "prop": "imageinfo", "iiprop": "url|extmetadata",
             }, headers=HEADERS, timeout=20)
             pages = (r.json().get("query") or {}).get("pages") or {}
             for page in pages.values():
                 info = (page.get("imageinfo") or [{}])[0]
                 meta = info.get("extmetadata") or {}
-                image_url = info.get("thumburl") or info.get("url")
+                image_url = info.get("url")
                 if not image_url:
                     continue
+                # Чистим сразу от UTM
+                image_url = clean_image_url(image_url)
                 title = strip_html((meta.get("ObjectName") or {}).get("value")) \
                         or clean_filename(page.get("title", ""))
                 artist = strip_html((meta.get("Artist") or {}).get("value"))
@@ -120,7 +142,7 @@ def source_commons(limit=20):
     return items
 
 def source_aic(limit=10):
-    """B) Art Institute of Chicago — без ключа, отдел Modern and Contemporary Art."""
+    """B) Art Institute of Chicago."""
     items = []
     try:
         r = requests.get("https://api.artic.edu/api/v1/artworks", params={
@@ -146,7 +168,7 @@ def source_aic(limit=10):
     return items
 
 def source_met(limit=10):
-    """C) The Met — только /objects и /objects/{id} (без /search)."""
+    """C) The Met — только /objects и /objects/{id}."""
     items = []
     try:
         r = requests.get("https://collectionapi.metmuseum.org/public/collection/v1/objects", timeout=20)
@@ -170,7 +192,7 @@ def source_met(limit=10):
                 "year": d.get("objectDate") or "",
                 "medium": d.get("medium") or "",
                 "description": "",
-                "image_url": d["primaryImage"],
+                "image_url": clean_image_url(d["primaryImage"]),
             })
             time.sleep(0.15)
     except Exception as e:
@@ -180,7 +202,6 @@ def source_met(limit=10):
 # ================= ПОДПИСЬ =================
 
 def compose_description(art, title_ru):
-    """Уникальное 📖-описание из данных работы (3 варианта по хешу ID)."""
     artist = art.get("artist") or "автор"
     year = art.get("year") or "XX век"
     medium = art.get("medium") or ""
@@ -196,7 +217,7 @@ def compose_description(art, title_ru):
 
 def build_caption(art):
     title_ru = translate(art["title"])
-    if not title_ru:          # перевод недоступен — английский не постим
+    if not title_ru:
         return None
     lines = [f"🎨 <b>{html.escape(title_ru)}</b>", ""]
     if art.get("artist"):
@@ -251,6 +272,7 @@ def main():
             continue
         img = download(art["image_url"])
         if not img:
+            print("   ⏭️ Не удалось получить картинку, иду дальше")
             continue
         res = send_photo(img, caption)
         if res.status_code == 200:
@@ -259,10 +281,10 @@ def main():
             print("   ✅ Отправлено")
         else:
             print(f"   ❌ Telegram: {res.text[:100]}")
-        time.sleep(1)
+        time.sleep(2)  # rate-limit на скачивания
 
     print(f"🎉 Отправлено: {sent}")
-    save_state(posted)          # создаётся ВСЕГДА
+    save_state(posted)
     print(f"💾 Сохранено ID: {len(posted)}")
 
 main()
