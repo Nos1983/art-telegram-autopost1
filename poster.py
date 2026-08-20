@@ -3,232 +3,149 @@ import json
 import os
 import time
 import random
+import html
+import urllib.parse
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 POSTS_PER_RUN = int(os.getenv("POSTS_PER_RUN", "1"))
 
-print("🏛️ The Met Collection Auto-Poster")
+print("🎨 Постер современного искусства")
 
 posted_ids = []
 if os.path.exists("posted_ids.json"):
     try:
         with open("posted_ids.json", "r", encoding="utf-8") as f:
             posted_ids = json.load(f)
-    except: posted_ids = []
+    except Exception:
+        posted_ids = []
 
-def fetch_met_artworks():
-    """Загружает работы через API The Met"""
-    
-    ids_url = "https://collectionapi.metmuseum.org/public/collection/v1/objects"
-    
-    print(f"📥 Запрашиваю список объектов...")
-    
+def translate(text):
+    """Перевод en→ru (Google + запасной MyMemory)"""
+    if not text:
+        return ""
+    text = text.strip()
     try:
-        response = requests.get(ids_url, timeout=15)
-        response.raise_for_status()
-        data = response.json()
-        
-        object_ids = data.get('objectIDs', [])
-        print(f"📊 Всего объектов: {len(object_ids)}")
-        
-        # Фильтруем уже отправленные
-        available_ids = [oid for oid in object_ids if oid not in posted_ids]
-        
-        if not available_ids:
-            print("⚠️ Все ID уже отправлены!")
-            return []
-        
-        # Берём случайные ID
-        selected_ids = random.sample(available_ids, min(50, len(available_ids)))
-        print(f"✅ Выбрано {len(selected_ids)} новых ID")
-        
-        # Загружаем детали
-        artworks = []
-        for oid in selected_ids:
-            try:
-                detail_url = f"https://collectionapi.metmuseum.org/public/collection/v1/objects/{oid}"
-                detail_resp = requests.get(detail_url, timeout=10)
-                
-                if detail_resp.status_code == 200:
-                    artwork = detail_resp.json()
-                    
-                    # Пропускаем без картинки
-                    if not artwork.get('primaryImage'):
-                        continue
-                    
-                    artworks.append(artwork)
-                    
-            except Exception as e:
-                continue
-            
-            time.sleep(0.2)
-        
-        return artworks
-        
-    except Exception as e:
-        print(f"❌ Ошибка API: {e}")
-        return []
-
-def create_description(artwork):
-    """Создаёт описание из метаданных The Met"""
-    
-    title = artwork.get('title', 'Без названия')
-    artist = artwork.get('artistDisplayName')
-    year = artwork.get('objectDate')
-    medium = artwork.get('medium')
-    department = artwork.get('department')
-    culture = artwork.get('culture')
-    gallery_num = artwork.get('galleryNumber')
-    link = artwork.get('objectURL', 'https://www.metmuseum.org')
-    
-    lines = []
-    
-    # Заголовок
-    lines.append(f"<b>{title}</b>\n")
-    
-    # Художник
-    if artist and artist != 'Unknown':
-        lines.append(f"👨‍🎨 <b>Художник:</b> {artist}")
-    
-    # Год/период
-    if year:
-        lines.append(f"📅 <b>Дата:</b> {year}")
-    
-    # Культура/регион
-    if culture and culture != 'Unknown':
-        lines.append(f"🌍 <b>Культура:</b> {culture}")
-    
-    # Отдел музея
-    if department:
-        lines.append(f"🏛️ <b>Отдел:</b> {department}")
-    
-    # Техника/материалы (красиво форматируем)
-    if medium:
-        # Заменяем технические термины на понятные
-        medium_map = {
-            'Oil on canvas': 'Масло на холсте',
-            'Watercolor': 'Акварель',
-            'Bronze': 'Бронза',
-            'Marble': 'Мрамор',
-            'Ink on paper': 'Тушь на бумаге',
-            'Photograph': 'Фотография',
-            'Sculpture': 'Скульптура',
-            'Painting': 'Живопись',
-        }
-        
-        medium_ru = medium_map.get(medium, medium)
-        lines.append(f"🎨 <b>Техника:</b> {medium_ru[:100]}")
-    
-    # Номер галереи (если есть)
-    if gallery_num:
-        lines.append(f"🖼️ <b>Галерея:</b> {gallery_num}")
-    
-    # Ссылка
-    lines.append(f"\n🔗 <a href=\"{link}\">Подробнее на Met Museum</a>")
-    
-    # Хештеги
-    lines.append("\n#TheMet #искусство #арт #музей #коллекция")
-    
-    return "\n".join(lines)
-
-def download_image(image_url):
-    """Скачивает изображение и возвращает байты"""
+        q = urllib.parse.quote(text)
+        r = requests.get(
+            f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ru&dt=t&q={q}",
+            timeout=8)
+        if r.status_code == 200:
+            out = r.json()[0][0][0]
+            if out:
+                return out
+    except Exception:
+        pass
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-        response = requests.get(image_url, headers=headers, timeout=30)
-        response.raise_for_status()
-        return response.content
-    except Exception as e:
-        print(f"⚠️ Не удалось скачать картинку: {e}")
-        return None
+        r = requests.get("https://api.mymemory.translated.net/get",
+                         params={"q": text[:450], "langpair": "en|ru"}, timeout=8)
+        if r.status_code == 200:
+            out = r.json().get("responseData", {}).get("translatedText", "")
+            if out:
+                return out
+    except Exception:
+        pass
+    return text
 
-def send_photo_as_file(image_data, caption):
-    """Отправляет картинку как файл (обходит проблему с URL)"""
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
-    
-    files = {
-        'photo': ('artwork.jpg', image_data, 'image/jpeg')
-    }
-    
-    data = {
-        'chat_id': CHAT_ID,
-        'caption': caption,
-        'parse_mode': 'HTML'
-    }
-    
+def fetch_modern_art_ids():
+    """Отдел Modern and Contemporary Art (id=21), только с картинками"""
+    url = "https://collectionapi.metmuseum.org/public/collection/v1/search"
+    r = requests.get(url, params={"departmentId": 21, "hasImages": "true"}, timeout=20)
+    r.raise_for_status()
+    return r.json().get("objectIDs", [])
+
+def get_artwork(oid):
+    url = f"https://collectionapi.metmuseum.org/public/collection/v1/objects/{oid}"
+    r = requests.get(url, timeout=10)
+    if r.status_code == 200:
+        return r.json()
+    return None
+
+def download_image(url):
     try:
-        res = requests.post(url, data=data, files=files, timeout=60)
-        return res
-    except Exception as e:
-        print(f"❌ Ошибка отправки: {e}")
+        r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=30)
+        r.raise_for_status()
+        return r.content
+    except Exception:
         return None
 
 # 🔥 Основной запуск
-print("\n🏛️ Загружаю работы из The Met API...")
-artworks = fetch_met_artworks()
+print("📥 Ищу работы современного искусства...")
+try:
+    all_ids = fetch_modern_art_ids()
+except Exception as e:
+    print(f"❌ Ошибка API: {e}")
+    all_ids = []
 
-if not artworks:
-    print("⚠️ Не найдено новых работ с картинками")
+print(f"📊 Найдено работ: {len(all_ids)}")
+
+new_ids = [i for i in all_ids if i not in posted_ids]
+if not new_ids:
+    print("⚠️ Новых работ нет")
     with open("posted_ids.json", "w", encoding="utf-8") as f:
         json.dump(posted_ids, f, ensure_ascii=False, indent=2)
-    print("💾 Сохранено (0 новых)")
     exit(0)
 
-print(f"✅ Найдено {len(artworks)} работ с картинками")
+selected = random.sample(new_ids, min(10, len(new_ids)))
 
-# Берём нужное количество
-artworks_to_post = artworks[:POSTS_PER_RUN]
-print(f"\n📤 Буду отправлять: {len(artworks_to_post)}\n")
-
-# Отправка
 sent = 0
-for i, artwork in enumerate(artworks_to_post):
-    title = artwork.get('title', 'Без названия')
-    object_id = artwork.get('objectID')
-    
-    print(f"[{i+1}] {title[:50]}...")
-    
-    # Картинка
-    image_url = artwork.get('primaryImage')
-    if not image_url:
-        print(f"    ⚠️ Нет картинки")
+for oid in selected:
+    if sent >= POSTS_PER_RUN:
+        break
+
+    art = get_artwork(oid)
+    if not art or not art.get("primaryImage"):
         continue
-    
-    print(f"    🖼️ Скачиваю картинку...")
-    
-    # Скачиваем картинку
-    image_data = download_image(image_url)
+
+    title = art.get("title", "")
+    artist = art.get("artistDisplayName", "")
+    date = art.get("objectDate", "")
+    medium = art.get("medium", "")
+
+    print(f"🎨 {title[:40]}...")
+
+    # Переводим на русский
+    title_ru = translate(title)
+    artist_ru = translate(artist) if artist and artist != "Unknown" else ""
+    medium_ru = translate(medium) if medium else ""
+
+    # Скачиваем картинку САМИ (обход ошибки Telegram)
+    image_data = download_image(art["primaryImage"])
     if not image_data:
-        print(f"    ❌ Не удалось скачать картинку")
+        image_data = download_image(art.get("primaryImageSmall", ""))
+    if not image_data:
+        print("   ⚠️ Не скачалась картинка, пропускаю")
         continue
-    
-    print(f"    ✅ Скачано: {len(image_data)} байт")
-    
-    # Создаём описание из метаданных
-    description = create_description(artwork)
-    
-    # Отправляем как файл
-    print(f"    📤 Отправляю...")
-    res = send_photo_as_file(image_data, description)
-    
-    if res and res.status_code == 200:
-        posted_ids.append(object_id)
+
+    # Подпись на русском, БЕЗ ссылки на источник
+    esc = html.escape
+    caption = f"🎨 <b>{esc(title_ru)}</b>\n\n"
+    if artist_ru:
+        caption += f"👨‍🎨 Художник: {esc(artist_ru)}\n"
+    if date:
+        caption += f"📅 Дата: {esc(date)}\n"
+    if medium_ru:
+        caption += f"🖌️ Техника: {esc(medium_ru)}\n"
+    caption += "\n#современноеискусство #арт"
+
+    # Отправка как файл
+    res = requests.post(
+        f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
+        data={"chat_id": CHAT_ID, "caption": caption, "parse_mode": "HTML"},
+        files={"photo": ("art.jpg", image_data, "image/jpeg")},
+        timeout=60
+    )
+
+    if res.status_code == 200:
+        posted_ids.append(oid)
         sent += 1
-        print(f"    ✅ Отправлено!")
+        print("   ✅ Отправлено!")
     else:
-        if res:
-            print(f"    ❌ {res.text[:80]}")
-        else:
-            print(f"    ❌ Ошибка отправки")
-    
+        print(f"   ❌ {res.text[:80]}")
+
     time.sleep(1)
 
-# Сохранение
 with open("posted_ids.json", "w", encoding="utf-8") as f:
     json.dump(posted_ids, f, ensure_ascii=False, indent=2)
 
-print(f"\n🎉 Отправлено: {sent}/{len(artworks_to_post)}")
-print(f"💾 Сохранено {len(posted_ids)} ID")
+print(f"\n🎉 Отправлено: {sent}")
