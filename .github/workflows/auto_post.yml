@@ -2,7 +2,7 @@ name: Auto Art Poster
 
 on:
   schedule:
-    - cron: '0 5,9,15 * * *'   # 08:00, 12:00, 18:00 МСК
+    - cron: '0 5,9,15 * * *'
   workflow_dispatch:
 
 jobs:
