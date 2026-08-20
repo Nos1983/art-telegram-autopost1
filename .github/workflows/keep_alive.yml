@@ -1,0 +1,10 @@
+name: Keep Alive
+on:
+  schedule:
+    - cron: '0 0 * * *'  # Каждый день в 03:00 МСК
+  workflow_dispatch:
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Repo is alive"
