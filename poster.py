@@ -22,7 +22,7 @@ def fetch_met_artworks():
     
     ids_url = "https://collectionapi.metmuseum.org/public/collection/v1/objects"
     
-    print(f" Запрашиваю список объектов...")
+    print(f"📥 Запрашиваю список объектов...")
     
     try:
         response = requests.get(ids_url, timeout=15)
@@ -101,7 +101,7 @@ def create_description(artwork):
     
     # Отдел музея
     if department:
-        lines.append(f"️ <b>Отдел:</b> {department}")
+        lines.append(f"🏛️ <b>Отдел:</b> {department}")
     
     # Техника/материалы (красиво форматируем)
     if medium:
@@ -122,7 +122,7 @@ def create_description(artwork):
     
     # Номер галереи (если есть)
     if gallery_num:
-        lines.append(f"️ <b>Галерея:</b> {gallery_num}")
+        lines.append(f"🖼️ <b>Галерея:</b> {gallery_num}")
     
     # Ссылка
     lines.append(f"\n🔗 <a href=\"{link}\">Подробнее на Met Museum</a>")
@@ -131,6 +131,40 @@ def create_description(artwork):
     lines.append("\n#TheMet #искусство #арт #музей #коллекция")
     
     return "\n".join(lines)
+
+def download_image(image_url):
+    """Скачивает изображение и возвращает байты"""
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        response = requests.get(image_url, headers=headers, timeout=30)
+        response.raise_for_status()
+        return response.content
+    except Exception as e:
+        print(f"⚠️ Не удалось скачать картинку: {e}")
+        return None
+
+def send_photo_as_file(image_data, caption):
+    """Отправляет картинку как файл (обходит проблему с URL)"""
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+    
+    files = {
+        'photo': ('artwork.jpg', image_data, 'image/jpeg')
+    }
+    
+    data = {
+        'chat_id': CHAT_ID,
+        'caption': caption,
+        'parse_mode': 'HTML'
+    }
+    
+    try:
+        res = requests.post(url, data=data, files=files, timeout=60)
+        return res
+    except Exception as e:
+        print(f"❌ Ошибка отправки: {e}")
+        return None
 
 # 🔥 Основной запуск
 print("\n🏛️ Загружаю работы из The Met API...")
@@ -163,33 +197,32 @@ for i, artwork in enumerate(artworks_to_post):
         print(f"    ⚠️ Нет картинки")
         continue
     
-    print(f"    🖼️ {image_url[:70]}...")
+    print(f"    🖼️ Скачиваю картинку...")
+    
+    # Скачиваем картинку
+    image_data = download_image(image_url)
+    if not image_data:
+        print(f"    ❌ Не удалось скачать картинку")
+        continue
+    
+    print(f"    ✅ Скачано: {len(image_data)} байт")
     
     # Создаём описание из метаданных
     description = create_description(artwork)
     
-    # Отправка
-    try:
-        res = requests.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
-            json={
-                "chat_id": CHAT_ID,
-                "photo": image_url,
-                "caption": description,
-                "parse_mode": "HTML"
-            },
-            timeout=30
-        )
-        
-        if res.status_code == 200:
-            posted_ids.append(object_id)
-            sent += 1
-            print(f"    ✅ Отправлено!")
-        else:
+    # Отправляем как файл
+    print(f"    📤 Отправляю...")
+    res = send_photo_as_file(image_data, description)
+    
+    if res and res.status_code == 200:
+        posted_ids.append(object_id)
+        sent += 1
+        print(f"    ✅ Отправлено!")
+    else:
+        if res:
             print(f"    ❌ {res.text[:80]}")
-            
-    except Exception as e:
-        print(f"    ❌ Ошибка: {e}")
+        else:
+            print(f"    ❌ Ошибка отправки")
     
     time.sleep(1)
 
@@ -198,4 +231,4 @@ with open("posted_ids.json", "w", encoding="utf-8") as f:
     json.dump(posted_ids, f, ensure_ascii=False, indent=2)
 
 print(f"\n🎉 Отправлено: {sent}/{len(artworks_to_post)}")
-print(f" Сохранено {len(posted_ids)} ID")
+print(f"💾 Сохранено {len(posted_ids)} ID")
